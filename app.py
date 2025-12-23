@@ -29,6 +29,9 @@ st.markdown("""
     .rank-s { background-color: #000000; border: 1px solid gold; color: gold; }
     .rank-a { background-color: #333333; color: white; }
     .rank-b { background-color: #cccccc; color: black; }
+    
+    /* 画像の枠デザイン */
+    .player-img { border-radius: 10px; border: 2px solid #eee; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -64,14 +67,24 @@ def load_data():
     today = datetime.now()
     df['age'] = (today - df['date_of_birth']).dt.days // 365
     
-    # ★修正: current_club_name を読み込むように追加
-    features = ['player_id', 'name', 'current_club_name', 'age', 'height_in_cm', 'position', 'market_value_in_eur', 
+    features = ['player_id', 'name', 'current_club_name', 'image_url', 'age', 'height_in_cm', 'position', 'market_value_in_eur', 
                 'country_of_citizenship', 'goals', 'assists', 'minutes_played', 'foot', 'matches']
     
-    # カラムが存在するか確認してからフィルタリング（エラー防止）
+    # カラムが存在するか確認
     available_features = [col for col in features if col in df.columns]
-    df = df[available_features].dropna().reset_index(drop=True)
+    df = df[available_features]
     
+    # 画像URLがない場合は、汎用的なアイコン（No Image）を入れる処理
+    if 'image_url' not in df.columns:
+        df['image_url'] = "https://cdn-icons-png.flaticon.com/512/3607/3607444.png"
+    else:
+        df['image_url'] = df['image_url'].fillna("https://cdn-icons-png.flaticon.com/512/3607/3607444.png")
+
+    # ★★★ ここが修正ポイント！ ★★★
+    # AI計算に使う重要なデータ（年齢、身長、市場価値）が欠けている選手を削除する
+    # これをしないと「NaN」エラーが出ます
+    df = df.dropna(subset=['name', 'market_value_in_eur', 'age', 'height_in_cm', 'goals', 'assists']).reset_index(drop=True)
+
     safe_matches = df['matches'].replace(0, 1)
     df['goals_per_match'] = df['goals'] / safe_matches
     
@@ -98,7 +111,8 @@ budget_range = st.sidebar.slider("予算範囲 (€)", 0, 150000000, (0, 5000000
 min_budget, max_budget = budget_range
 age_range = st.sidebar.slider("年齢の範囲", 15, 45, (16, 35))
 min_age, max_age = age_range
-all_countries = sorted(df['country_of_citizenship'].unique())
+# ★ここも修正: 国籍リストから空データを除外してソート
+all_countries = sorted(df['country_of_citizenship'].dropna().unique())
 selected_countries = st.sidebar.multiselect("国籍で絞り込む", all_countries)
 
 if 'search_results' not in st.session_state: st.session_state['search_results'] = None
@@ -146,26 +160,30 @@ if mode == "🔍 類似選手スカウト":
         target = st.session_state['target_player']
         recommendations = st.session_state['search_results'].head(5)
         
-        # 1. ターゲット情報
+        # 1. ターゲット情報（写真付き）
         with st.container():
             target_badge = get_roi_badge(target['roi_score'], df['roi_score'])
-            # ★クラブ名を表示
             club_name = target['current_club_name'] if 'current_club_name' in target else "Unknown"
             
-            st.markdown(f"""
-            <div style="background-color: #ffffff; padding: 20px; border: 2px solid #000000; margin-bottom: 20px; box-shadow: 5px 5px 0px #cccccc;">
-                <h2 style="margin:0; color:#000;">🎯 {target['name']} <span style="font-size: 0.6em; color: #555;">({club_name})</span></h2>
-                <div style="margin-top: 10px;">{target_badge} (ROI: {target['roi_score']:.2f})</div>
-                <div style="display: flex; gap: 20px; margin-top: 15px; color: #333;">
-                    <div><b>年齢:</b> {target['age']}</div>
-                    <div><b>身長:</b> {target['height_in_cm']}cm</div>
-                    <div><b>利き足:</b> {format_foot(target['foot'])}</div>
-                    <div><b>市場価値:</b> {format_currency(target['market_value_in_eur'])}</div>
-                    <div><b>G/A:</b> {int(target['goals'])}G / {int(target['assists'])}A</div>
-                </div>
-            </div>""", unsafe_allow_html=True)
+            col_img, col_info = st.columns([1, 4])
+            
+            with col_img:
+                st.image(target['image_url'], width=120)
+                
+            with col_info:
+                st.markdown(f"""
+                <div style="background-color: #ffffff; padding: 15px; border: 2px solid #000000; box-shadow: 5px 5px 0px #cccccc;">
+                    <h2 style="margin:0; color:#000;">🎯 {target['name']} <span style="font-size: 0.6em; color: #555;">({club_name})</span></h2>
+                    <div style="margin-top: 10px;">{target_badge} (ROI: {target['roi_score']:.2f})</div>
+                    <div style="display: flex; gap: 20px; margin-top: 10px; color: #333;">
+                        <div><b>年齢:</b> {target['age']}</div>
+                        <div><b>身長:</b> {target['height_in_cm']}cm</div>
+                        <div><b>市場価値:</b> {format_currency(target['market_value_in_eur'])}</div>
+                        <div><b>G/A:</b> {int(target['goals'])}G / {int(target['assists'])}A</div>
+                    </div>
+                </div>""", unsafe_allow_html=True)
         
-        # 2. ターゲットのグラフ & 履歴 (復活！)
+        # 2. ターゲットのグラフ & 履歴
         st.subheader(f"📈 {target['name']} のシーズン詳細")
         target_season = season_df[season_df['player_id'] == target['player_id']].sort_values('season')
         
@@ -175,8 +193,7 @@ if mode == "🔍 類似選手スカウト":
             new_names = {'goals': 'ゴール', 'assists': 'アシスト'}
             fig_line.for_each_trace(lambda t: t.update(name = new_names.get(t.name, t.name)))
             st.plotly_chart(fig_line, use_container_width=True)
-            
-            with st.expander(f"📅 {target['name']} のシーズン別成績表を見る", expanded=True):
+            with st.expander(f"📅 {target['name']} のシーズン別成績表を見る"):
                 st.dataframe(target_season[['season', 'club_name', 'matches', 'goals', 'assists']].sort_values('season', ascending=False), hide_index=True, use_container_width=True)
 
         # 3. マネーボール
@@ -191,7 +208,7 @@ if mode == "🔍 類似選手スカウト":
         fig_scatter.update_traces(textposition='top center', marker=dict(line=dict(width=1, color='DarkSlateGrey')))
         st.plotly_chart(fig_scatter, use_container_width=True)
 
-        # 4. Head-to-Head
+        # 4. Head-to-Head (写真付き)
         st.write("---")
         st.header("⚖️ Head-to-Head: 徹底比較")
         candidate_names = recommendations['name'].tolist()
@@ -201,12 +218,14 @@ if mode == "🔍 類似選手スカウト":
         h_col1, h_col2, h_col3 = st.columns([1, 1, 2])
         with h_col1:
             st.info("ターゲット")
-            st.markdown(f"**{target['name']}**<br>{target['age']}歳 / {target['height_in_cm']}cm<br>{format_currency(target['market_value_in_eur'])}<br>{int(target['goals'])}G / {int(target['assists'])}A<br>⚡ {target['goals_per_match']:.2f} G/M", unsafe_allow_html=True)
+            st.image(target['image_url'], width=100)
+            st.markdown(f"**{target['name']}**<br>{target['age']}歳 / {target['height_in_cm']}cm<br>{format_currency(target['market_value_in_eur'])}<br>⚡ {target['goals_per_match']:.2f} G/M", unsafe_allow_html=True)
         with h_col2:
             st.success("候補者")
+            st.image(rival['image_url'], width=100)
             price_arrow = "💰" if target['market_value_in_eur'] > rival['market_value_in_eur'] else ""
             gpm_arrow = "🔥" if rival['goals_per_match'] > target['goals_per_match'] else ""
-            st.markdown(f"**{rival['name']}**<br>{rival['age']}歳<br>{format_currency(rival['market_value_in_eur'])} {price_arrow}<br>{int(rival['goals'])}G / {int(rival['assists'])}A<br>⚡ {rival['goals_per_match']:.2f} G/M {gpm_arrow}", unsafe_allow_html=True)
+            st.markdown(f"**{rival['name']}**<br>{rival['age']}歳<br>{format_currency(rival['market_value_in_eur'])} {price_arrow}<br>⚡ {rival['goals_per_match']:.2f} G/M {gpm_arrow}", unsafe_allow_html=True)
         with h_col3:
             comp_data = pd.DataFrame({
                 'Stats': ['年齢', '身長', 'ゴール', 'アシスト'],
@@ -222,19 +241,21 @@ if mode == "🔍 類似選手スカウト":
             fig_gpm.update_traces(texttemplate='%{text:.2f}', textposition='outside')
             st.plotly_chart(fig_gpm, use_container_width=True)
 
-        # 5. 詳細リスト
+        # 5. 詳細リスト (写真付き)
         st.write("---")
         st.subheader(f"🎯 おすすめ選手 Top 5 詳細")
         for index, row in recommendations.iterrows():
             highlight = "👈 Check!" if row['name'] == selected_rival_name else ""
             badge_html = get_roi_badge(row['roi_score'], df['roi_score'])
-            # ★クラブ名表示
             cand_club = row['current_club_name'] if 'current_club_name' in row else "Unknown"
             
             with st.container():
-                col1, col2 = st.columns([1, 1])
-                with col1:
-                    # 名前とクラブ名を併記
+                col_img, col_info, col_radar = st.columns([1, 2, 2])
+                
+                with col_img:
+                    st.image(row['image_url'], use_container_width=True)
+                
+                with col_info:
                     st.subheader(f"🏃 {row['name']} {highlight}")
                     st.write(f"🏠 **{cand_club}**")
                     st.markdown(badge_html, unsafe_allow_html=True)
@@ -243,18 +264,14 @@ if mode == "🔍 類似選手スカウト":
                     st.write(f"⚡ 決定力: **{row['goals_per_match']:.2f} G/M**")
                     st.write(f"AI類似度: {round(row['similarity']*100, 1)}%")
                     
-                    # ★シーズン詳細履歴（グラフ＋表）復活！
                     with st.expander("📅 詳細データ（シーズン履歴）を見る"):
                         player_season = season_df[season_df['player_id'] == row['player_id']].sort_values('season')
                         if not player_season.empty:
                             fig_cand = px.line(player_season, x='season', y=['goals', 'assists'], markers=True, height=200, color_discrete_sequence=['#000000', '#888888'])
                             st.plotly_chart(fig_cand, use_container_width=True)
                             st.dataframe(player_season[['season', 'club_name', 'matches', 'goals', 'assists']].sort_values('season', ascending=False), hide_index=True)
-                        else:
-                            st.write("詳細データがありません")
                 
-                with col2:
-                    # レーダーチャート
+                with col_radar:
                     goal_score = min(100, row['goals'] * 2)
                     assist_score = min(100, row['assists'] * 3.3)
                     youth_score = max(0, min(100, (40 - row['age']) * 4))
@@ -296,26 +313,27 @@ elif mode == "💎 お買い得発掘ランキング":
         ranked_df = filtered_df.sort_values(by='roi_score', ascending=False).head(20)
         
         if len(ranked_df) == 0:
-            st.warning(f"条件に合う選手がいませんでした。\n予算: {format_currency(min_budget)} - {format_currency(max_budget)}")
+            st.warning(f"条件に合う選手がいませんでした。")
         else:
             st.subheader(f"💎 {selected_position} のお買い得選手ランキング (Top 20)")
-            st.caption(f"予算: {format_currency(min_budget)}-{format_currency(max_budget)} / 年齢: {min_age}-{max_age}歳 / 地域: {selected_countries if selected_countries else 'All'}")
+            st.caption(f"予算: {format_currency(min_budget)}-{format_currency(max_budget)} / 年齢: {min_age}-{max_age}歳")
             
             for i, (index, row) in enumerate(ranked_df.iterrows()):
                 rank = i + 1
                 badge_html = get_roi_badge(row['roi_score'], df['roi_score'])
-                # ★クラブ名
                 club_name = row['current_club_name'] if 'current_club_name' in row else "Unknown"
                 
                 with st.container():
-                    col1, col2, col3 = st.columns([1, 2, 2])
+                    col1, col_img, col2, col3 = st.columns([1, 1, 2, 2])
                     with col1:
                         st.markdown(f"<h1 style='text-align: center; color: #333;'>#{rank}</h1>", unsafe_allow_html=True)
+                    with col_img:
+                        st.image(row['image_url'], use_container_width=True)
                     with col2:
                         st.subheader(f"{row['name']}")
-                        st.write(f"🏠 **{club_name}**") # ★クラブ名表示
+                        st.write(f"🏠 **{club_name}**")
                         st.markdown(badge_html, unsafe_allow_html=True)
-                        st.write(f"国籍: {row['country_of_citizenship']} / 年齢: {row['age']}歳")
+                        st.write(f"国籍: {row['country_of_citizenship']}")
                     with col3:
                         st.metric("市場価値", format_currency(row['market_value_in_eur']))
                         st.metric("ROIスコア", f"{row['roi_score']:.2f}", delta="コスパ指数")
@@ -330,7 +348,6 @@ elif mode == "💎 お買い得発掘ランキング":
                             if not player_season.empty:
                                 fig = px.line(player_season, x='season', y=['goals', 'assists'], markers=True, height=200, color_discrete_sequence=['#000000', '#888888'])
                                 st.plotly_chart(fig, use_container_width=True)
-                                # ★表もここに表示
                                 st.dataframe(player_season[['season', 'club_name', 'matches', 'goals', 'assists']].sort_values('season', ascending=False), hide_index=True)
                 st.markdown("---")
                 
